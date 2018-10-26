@@ -49,3 +49,5 @@ model.load_weights('model_weights_20_epochs.h5')
 
 score = model.evaluate(X_test, y_test, batch_size=128)
 print(score)
+
+model.save('full_model_20_epochs.h5')
