@@ -1,53 +1,90 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.layers import Flatten
-from keras.layers.convolutional import Convolution2D
-from keras.layers.convolutional import MaxPooling2D
-from sklearn.preprocessing import LabelEncoder,OneHotEncoder
-from keras import backend as K
+from keras import applications
+from keras.preprocessing.image import ImageDataGenerator
+from keras import optimizers
+from keras.models import Sequential, Model
+from keras.layers import Dropout, Flatten, Dense, GlobalAveragePooling2D
+from keras import backend as k
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler, TensorBoard, EarlyStopping
 
-# Read training and test data files
-train = pd.read_csv("./input/fashion-mnist_train.csv").values
-test  = pd.read_csv("./input/fashion-mnist_test.csv").values
+"""
+Primera aproximación a una red:
+- Red entrenada con aprox 1300 imágenes. Preentrenada con imagenet.
+- Reconoce 3 clases: jeans, remeras y zapatos. Para cambiar ese numero:
+    - Agregar una carpeta con imagenes a data/train/nombre_clase
+    - Cambiar la linea predictions = Dense(3, activation="softmax")(x) por el número nuevo de clases.
+- El resultado es un archivo vgg16_1.h5 que contiene el modelo entrenado.
+- No sé cuánto puede tardar en entrenar en una CPU. En GPU tarda un buen rato.
 
-# Reshape and normalize training data
-trainX = train[:, 1:].reshape(train.shape[0],1,28, 28).astype( 'float32' )
-X_train = trainX / 255.0
+"""
 
-y_train = train[:,0]
+img_width, img_height = 256, 256
+train_data_dir = "data/train"
+validation_data_dir = "data/val"
+nb_train_samples = 1042
+nb_validation_samples = 257
+batch_size = 16
+epochs = 50
+
+model = applications.VGG19(weights = "imagenet", include_top=False, input_shape = (img_width, img_height, 3))
+print(model.summary())
+# Freeze the layers which you don't want to train. Here I am freezing the first 5 layers.
+for layer in model.layers[:5]:
+    layer.trainable = False
+
+#Adding custom Layers
+x = model.output
+x = Flatten()(x)
+x = Dense(1024, activation="relu")(x)
+x = Dropout(0.5)(x)
+x = Dense(1024, activation="relu")(x)
+predictions = Dense(3, activation="softmax")(x)
+
+# creating the final model
+model_final = Model(inputs = model.input, outputs = predictions)
+
+# compile the model
+model_final.compile(loss = "categorical_crossentropy", optimizer = optimizers.SGD(lr=0.0001, momentum=0.9), metrics=["accuracy"])
+
+# Initiate the train and test generators with data Augumentation
+train_datagen = ImageDataGenerator(
+rescale = 1./255,
+horizontal_flip = True,
+fill_mode = "nearest",
+zoom_range = 0.3,
+width_shift_range = 0.3,
+height_shift_range=0.3,
+rotation_range=30)
+
+test_datagen = ImageDataGenerator(
+rescale = 1./255,
+horizontal_flip = True,
+fill_mode = "nearest",
+zoom_range = 0.3,
+width_shift_range = 0.3,
+height_shift_range=0.3,
+rotation_range=30)
+
+train_generator = train_datagen.flow_from_directory(
+train_data_dir,
+target_size = (img_height, img_width),
+batch_size = batch_size,
+class_mode = "categorical")
+
+validation_generator = test_datagen.flow_from_directory(
+validation_data_dir,
+target_size = (img_height, img_width),
+class_mode = "categorical")
+
+# Save the model according to the conditions
+checkpoint = ModelCheckpoint("vgg16_1.h5", monitor='val_acc', verbose=1, save_best_only=True, save_weights_only=False, mode='auto', period=1)
+early = EarlyStopping(monitor='val_acc', min_delta=0, patience=10, verbose=1, mode='auto')
 
 
-# Reshape and normalize test data
-testX = test[:,1:].reshape(test.shape[0],1, 28, 28).astype( 'float32' )
-X_test = testX / 255.0
-
-y_test = test[:,0]
-
-from sklearn import preprocessing
-lb = preprocessing.LabelBinarizer()
-y_train = lb.fit_transform(y_train)
-y_test = lb.fit_transform(y_test)
-
-model = Sequential()
-K.set_image_dim_ordering('th')
-model.add(Convolution2D(30, 5, 5, border_mode= 'valid' , input_shape=(1, 28, 28),activation= 'relu' ))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Convolution2D(15, 3, 3, activation= 'relu' ))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Dropout(0.2))
-model.add(Flatten())
-model.add(Dense(128, activation= 'relu' ))
-model.add(Dense(50, activation= 'relu' ))
-model.add(Dense(10, activation= 'softmax' ))
-  # Compile model
-model.compile(loss= 'categorical_crossentropy' , optimizer= 'adam' , metrics=[ 'accuracy' ])
-
-model.fit(X_train, y_train,
-          epochs=20,
-          batch_size= 160)
-score = model.evaluate(X_test, y_test, batch_size=128)
-
-model.save_weights('model_weights_20_epochs.h5')
+# Train the model
+model_final.fit_generator(
+train_generator,
+steps_per_epoch= nb_train_samples/batch_size,
+epochs = epochs,
+validation_data = validation_generator,
+nb_val_samples = nb_validation_samples,
+callbacks = [checkpoint, early])
